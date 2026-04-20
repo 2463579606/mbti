@@ -10,6 +10,7 @@ import { config } from '../../config/config';
 
 // Entities
 import { entities } from '../../internal/entities';
+import { AIAnalysisRecord } from '../../internal/ai/entities/ai-analysis.entity';
 
 @Global()
 @Module({
@@ -24,7 +25,7 @@ import { entities } from '../../internal/entities';
         username: process.env.DB_USERNAME || config.database.username,
         password: process.env.DB_PASSWORD || config.database.password,
         database: process.env.DB_DATABASE || config.database.database,
-        entities: entities,
+        entities: [...entities, AIAnalysisRecord],
         synchronize: true, // Force synchronize to create tables
         logging: config.database.logging,
         ssl: config.nodeEnv === 'production' ? { rejectUnauthorized: false } : false,

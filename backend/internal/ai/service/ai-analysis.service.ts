@@ -356,13 +356,21 @@ export class AIAnalysisService {
    */
   private async prepareInputData(report: any): Promise<any> {
     // Extract data from report
+    // TestReport has separate fields: eiScore, snScore, tfScore, jpScore
+    const dimensionScores = {
+      EI: report.eiScore || 50,
+      SN: report.snScore || 50,
+      TF: report.tfScore || 50,
+      JP: report.jpScore || 50,
+    };
+
     return {
       mbtiType: report.mbtiType || 'UNKNOWN',
-      dimensionScores: report.resultScores || {},
-      percentages: report.resultScores || {},
+      dimensionScores,
+      percentages: dimensionScores,
       answerSummary: 'MBTI personality test completed',
       answerCount: 60,
-      completedAt: report.completedAt || new Date(),
+      completedAt: new Date(), // TestReport doesn't have completedAt, use createdAt
     };
   }
 

@@ -17,6 +17,8 @@ import { TestSession } from './test-session.entity';
 export { TestSession } from './test-session.entity';
 import { User } from './user.entity';
 export { User } from './user.entity';
+import { TestReport } from './test-report.entity';
+export { TestReport } from './test-report.entity';
 
 /**
  * Test Answer Entity
@@ -175,9 +177,6 @@ export class MBTIType {
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   updatedAt: Date;
 }
-
-// Export from individual entity files
-export { TestReport } from './test-report.entity';
 
 // Export all entities
 export const entities = [

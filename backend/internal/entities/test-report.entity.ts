@@ -8,12 +8,12 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
-  UpdateDateColumn,
   ManyToOne,
   JoinColumn,
   Index,
 } from 'typeorm';
 import { User } from './user.entity';
+import { TestSession } from './test-session.entity';
 
 @Entity('test_reports')
 export class TestReport {
@@ -24,7 +24,7 @@ export class TestReport {
   @Index()
   userId: number | null;
 
-  @Column({ type: 'bigint' })
+  @Column({ type: 'bigint', unique: true })
   @Index()
   sessionId: number;
 
@@ -32,30 +32,44 @@ export class TestReport {
   @Index()
   mbtiType: string;  // e.g., "INTJ"
 
-  @Column({ type: 'jsonb', nullable: true })
-  resultScores: Record<string, number> | null;  // { EI: 30, SN: 20, TF: 28, JP: 25 }
+  // Dimension scores (percentages 0-100)
+  @Column({ type: 'int' })
+  eiScore: number;  // 0-100
+
+  @Column({ type: 'int' })
+  snScore: number;  // 0-100
+
+  @Column({ type: 'int' })
+  tfScore: number;  // 0-100
+
+  @Column({ type: 'int' })
+  jpScore: number;  // 0-100
+
+  // Detailed data (JSON)
+  @Column({ type: 'jsonb' })
+  dimensionDetails: Record<string, any>;
 
   @Column({ type: 'jsonb', nullable: true })
-  dimensionDetails: Record<string, any> | null;
+  personalityAnalysis: Record<string, any> | null;
 
-  @Column({ type: 'varchar', length: 64, unique: true })
+  // Sharing
+  @Column({ type: 'varchar', length: 64, unique: true, nullable: true })
   @Index()
-  shareToken: string;
+  shareToken: string | null;
 
-  @Column({ type: 'timestamp', nullable: true })
-  completedAt: Date | null;
+  @Column({ type: 'int', default: 0 })
+  shareCount: number;
 
-  @Column({ type: 'int', nullable: true })
-  durationSeconds: number | null;
-
+  // Timestamp
   @CreateDateColumn({ type: 'timestamp' })
   @Index()
   createdAt: Date;
 
-  @UpdateDateColumn({ type: 'timestamp' })
-  updatedAt: Date;
-
   // Relations
+  @ManyToOne(() => TestSession, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'session_id' })
+  session: TestSession;
+
   @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'user_id' })
   user: User | null;
