@@ -5,8 +5,8 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as compression from 'compression';
-import * as helmet from 'helmet';
+import compression from 'compression';
+import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { config, validateConfig } from '../../config/config';
 import { logger } from '../../pkg/utils/logger';
@@ -26,9 +26,7 @@ async function bootstrap() {
     const configService = app.get(ConfigService);
 
     // Security middleware
-    // @ts-ignore
     app.use(helmet());
-    // @ts-ignore
     app.use(compression());
 
     // CORS

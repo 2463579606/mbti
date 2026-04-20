@@ -7,7 +7,7 @@ import { Injectable, Logger, Inject } from '@nestjs/common';
 import { getAIClient } from '../../../pkg/openai/openai-client';
 import { AIPromptBuilder } from './ai-prompt.builder';
 import { AIAnalysisRepository } from '../repository/ai-analysis.repository';
-import { AICacheService } from './ai-cache.service';
+// import { AICacheService } from './ai-cache.service';  // Temporarily disabled
 import { AIAnalysisRecord, AnalysisStatus, AnalysisType } from '../entities/ai-analysis.entity';
 import { AnalysisInputData, AnalysisContent } from '../types/ai-config.types';
 
@@ -18,7 +18,7 @@ export class AIGenerationService {
 
   constructor(
     private readonly aiAnalysisRepository: AIAnalysisRepository,
-    private readonly aiCacheService: AICacheService,
+    // private readonly aiCacheService: AICacheService,  // Temporarily disabled
   ) {}
 
   /**
@@ -99,14 +99,14 @@ export class AIGenerationService {
         completedAt: new Date(),
       });
 
-      // 10. Cache the analysis result
-      await this.aiCacheService.cacheAnalysis(
-        analysisId,
-        analysis.reportId,
-        inputData.mbtiType,
-        inputData.dimensionScores,
-        analysis.analysisType
-      );
+      // 10. Cache the analysis result (TEMPORARY: Disabled)
+      // await this.aiCacheService.cacheAnalysis(
+      //   analysisId,
+      //   analysis.reportId,
+      //   inputData.mbtiType,
+      //   inputData.dimensionScores,
+      //   analysis.analysisType
+      // );
 
       this.logger.log(`AI generation completed for analysis ${analysisId} in ${processingTimeMs}ms`);
 

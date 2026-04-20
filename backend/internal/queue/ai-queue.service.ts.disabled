@@ -1,0 +1,300 @@
+/**
+ * AI Queue Service
+ * Manages asynchronous AI analysis tasks using Bull queue
+ */
+
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Queue, Worker, Job } from 'bull';
+import { createClient } from 'redis';
+import { AIGenerationService } from '../ai/service/ai-generation.service';
+import { AIAnalysisRepository } from '../ai/repository/ai-analysis.repository';
+import { AnalysisStatus } from '../ai/entities/ai-analysis.entity';
+import { getAIConfig } from '../../config/ai.config';
+
+interface AIAnalysisJob {
+  analysisId: number;
+  reportId: number;
+  attempt?: number;
+}
+
+@Injectable()
+export class AIQueueService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(AIQueueService.name);
+  private readonly config = getAIConfig();
+
+  // Bull Queue
+  private analysisQueue: Queue;
+  private worker: Worker;
+
+  // Redis connection
+  private redisClient: ReturnType<typeof createClient>;
+
+  constructor(
+    private readonly aiGenerationService: AIGenerationService,
+    private readonly aiAnalysisRepository: AIAnalysisRepository,
+  ) {}
+
+  /**
+   * Initialize queue and worker on module init
+   */
+  async onModuleInit() {
+    if (!this.config.queueEnabled) {
+      this.logger.log('⚠️  Queue is disabled. AI analyses will run synchronously.');
+      return;
+    }
+
+    await this.initializeQueue();
+    await this.initializeWorker();
+  }
+
+  /**
+   * Initialize Bull Queue
+   */
+  private async initializeQueue() {
+    this.logger.log('📦 Initializing AI Analysis Queue...');
+
+    // Create Redis client with correct configuration format
+    const redisUrl = `redis://${this.config.redis.password ? `:${this.config.redis.password}@` : ''}${this.config.redis.host}:${this.config.redis.port}/${this.config.redis.db}`;
+
+    this.redisClient = createClient({
+      url: redisUrl,
+    });
+
+    // Connect to Redis
+    await this.redisClient.connect();
+    this.logger.log('✅ Connected to Redis');
+
+    // Create queue
+    this.analysisQueue = new Queue('ai-analysis', {
+      connection: this.redisClient as any,
+      defaultJobOptions: {
+        attempts: this.config.maxRetries,
+        backoff: {
+          type: 'exponential',
+          delay: this.config.retryDelay,
+        },
+        removeOnComplete: 100, // Keep last 100 completed jobs
+        removeOnFail: 500, // Keep last 500 failed jobs
+        timeout: 120000, // 2 minutes
+      },
+    });
+
+    this.logger.log('✅ AI Analysis Queue created');
+  }
+
+  /**
+   * Initialize Queue Worker
+   */
+  private async initializeWorker() {
+    this.logger.log('👷 Initializing AI Analysis Worker...');
+
+    this.worker = new Worker('ai-analysis', async (job: Job) => {
+      return await this.processAIAnalysis(job);
+    }, {
+      connection: this.redisClient as any,
+      concurrency: this.config.maxConcurrent,
+      limiter: {
+        max: 10, // Max 10 jobs per time window
+        duration: 1000, // 1 second
+      },
+    });
+
+    // Worker event listeners
+    this.worker.on('completed', (job: Job) => {
+      this.logger.log(`✅ Job ${job.id} completed`);
+    });
+
+    this.worker.on('failed', (job: Job, error: Error) => {
+      this.logger.error(`❌ Job ${job.id} failed: ${error.message}`);
+    });
+
+    this.worker.on('progress', (job: Job, progress: number) => {
+      this.logger.debug(`📊 Job ${job.id} progress: ${progress}%`);
+    });
+
+    this.logger.log('✅ AI Analysis Worker started');
+  }
+
+  /**
+   * Add AI analysis task to queue
+   */
+  async addAnalysisTask(analysisId: number, reportId: number): Promise<void> {
+    if (!this.analysisQueue) {
+      this.logger.warn('Queue is disabled, running synchronously');
+      await this.aiGenerationService.generateAnalysis(analysisId);
+      return;
+    }
+
+    this.logger.log(`📤 Adding analysis ${analysisId} to queue...`);
+
+    await this.analysisQueue.add(
+      'generate-analysis',
+      { analysisId, reportId },
+      {
+        jobId: `analysis-${analysisId}`,
+        priority: 1,
+      }
+    );
+
+    this.logger.log(`✅ Analysis ${analysisId} added to queue`);
+  }
+
+  /**
+   * Process AI analysis job
+   */
+  private async processAIAnalysis(job: Job): Promise<void> {
+    const data = job.data as AIAnalysisJob;
+    const { analysisId, reportId, attempt = 1 } = data;
+
+    this.logger.log(`🔄 Processing analysis ${analysisId} (attempt ${attempt})...`);
+
+    try {
+      // Update job progress (10%)
+      await job.updateProgress(10);
+
+      // Check if analysis still exists and is pending
+      const analysis = await this.aiAnalysisRepository.findById(analysisId);
+      if (!analysis) {
+        throw new Error(`Analysis ${analysisId} not found`);
+      }
+
+      if (analysis.status === AnalysisStatus.COMPLETED) {
+        this.logger.log(`⏭️  Analysis ${analysisId} already completed, skipping`);
+        return;
+      }
+
+      // Update progress (30%)
+      await job.updateProgress(30);
+
+      // Generate AI analysis
+      await this.aiGenerationService.generateAnalysis(analysisId);
+
+      // Update progress (100%)
+      await job.updateProgress(100);
+
+      this.logger.log(`✅ Analysis ${analysisId} processed successfully`);
+
+    } catch (error: any) {
+      this.logger.error(`❌ Failed to process analysis ${analysisId}: ${error.message}`);
+
+      // Don't retry on certain errors
+      if (
+        error.message.includes('not found') ||
+        error.message.includes('validation') ||
+        error.message.includes('format')
+      ) {
+        throw error; // Don't retry
+      }
+
+      // Retry on other errors
+      throw error;
+    }
+  }
+
+  /**
+   * Get queue statistics
+   */
+  async getQueueStats() {
+    if (!this.analysisQueue) {
+      return {
+        enabled: false,
+        message: 'Queue is disabled',
+      };
+    }
+
+    const [waiting, active, completed, failed] = await Promise.all([
+      this.analysisQueue.getWaitingCount(),
+      this.analysisQueue.getActiveCount(),
+      this.analysisQueue.getCompletedCount(),
+      this.analysisQueue.getFailedCount(),
+    ]);
+
+    return {
+      enabled: true,
+      waiting,
+      active,
+      completed,
+      failed,
+    };
+  }
+
+  /**
+   * Pause queue processing
+   */
+  async pause(): Promise<void> {
+    if (this.worker) {
+      await this.worker.pause();
+      this.logger.log('⏸️  Queue worker paused');
+    }
+  }
+
+  /**
+   * Resume queue processing
+   */
+  async resume(): Promise<void> {
+    if (this.worker) {
+      await this.worker.resume();
+      this.logger.log('▶️  Queue worker resumed');
+    }
+  }
+
+  /**
+   * Clean up on module destroy
+   */
+  async onModuleDestroy() {
+    this.logger.log('🧹 Cleaning up AI Queue Service...');
+
+    if (this.worker) {
+      await this.worker.close();
+      this.logger.log('✅ Worker closed');
+    }
+
+    if (this.analysisQueue) {
+      await this.analysisQueue.close();
+      this.logger.log('✅ Queue closed');
+    }
+
+    if (this.redisClient) {
+      await this.redisClient.quit();
+      this.logger.log('✅ Redis connection closed');
+    }
+  }
+
+  /**
+   * Obliterate (drain) queue
+   */
+  async obliterate(): Promise<void> {
+    if (this.analysisQueue) {
+      await this.analysisQueue.obliterate({ force: true });
+      this.logger.log('🗑️  Queue obliterated');
+    }
+  }
+
+  /**
+   * Get failed jobs for retry
+   */
+  async getFailedJobs(limit = 50) {
+    if (!this.analysisQueue) {
+      return [];
+    }
+
+    return await this.analysisQueue.getFailed(limit, 0, true);
+  }
+
+  /**
+   * Retry failed job
+   */
+  async retryJob(jobId: string): Promise<void> {
+    if (!this.analysisQueue) {
+      throw new Error('Queue is disabled');
+    }
+
+    const job = await this.analysisQueue.getJob(jobId);
+    if (job) {
+      await job.retry();
+      this.logger.log(`🔄 Job ${jobId} queued for retry`);
+    } else {
+      throw new Error(`Job ${jobId} not found`);
+    }
+  }
+}
