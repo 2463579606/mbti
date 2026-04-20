@@ -1,0 +1,258 @@
+/**
+ * AI Prompt Builder Unit Tests
+ */
+
+import { AIPromptBuilder } from './ai-prompt.builder';
+import { AnalysisType, AnalysisInputData } from '../types/ai-config.types';
+
+describe('AIPromptBuilder', () => {
+  let builder: AIPromptBuilder;
+
+  beforeEach(() => {
+    builder = new AIPromptBuilder();
+  });
+
+  const mockInputData: AnalysisInputData = {
+    mbtiType: 'INTJ',
+    dimensionScores: {
+      EI: 75, // E (≥50)
+      SN: 40, // N (<50)
+      TF: 65, // T (≥50)
+      JP: 55, // J (≥50)
+    },
+    percentages: {
+      EI: 75,
+      SN: 40,
+      TF: 65,
+      JP: 55,
+    },
+    answerSummary: 'Test completed all 60 questions',
+    answerCount: 60,
+    completedAt: new Date('2024-01-01T12:00:00Z'),
+  };
+
+  describe('buildPrompt', () => {
+    it('should build comprehensive analysis prompt', async () => {
+      const result = await builder.buildPrompt(
+        mockInputData.mbtiType,
+        mockInputData,
+        AnalysisType.COMPREHENSIVE
+      );
+
+      expect(result.systemRole).toBeDefined();
+      expect(result.userPrompt).toBeDefined();
+      expect(result.systemRole).toContain('MBTI性格分析师');
+      expect(result.userPrompt).toContain('comprehensive');
+      expect(result.userPrompt).toContain('INTJ');
+    });
+
+    it('should build career analysis prompt', async () => {
+      const result = await builder.buildPrompt(
+        mockInputData.mbtiType,
+        mockInputData,
+        AnalysisType.CAREER
+      );
+
+      expect(result.systemRole).toContain('职业规划专家');
+      expect(result.userPrompt).toContain('career');
+    });
+
+    it('should build relationship analysis prompt', async () => {
+      const result = await builder.buildPrompt(
+        mockInputData.mbtiType,
+        mockInputData,
+        AnalysisType.RELATIONSHIP
+      );
+
+      expect(result.systemRole).toContain('人际关系专家');
+      expect(result.userPrompt).toContain('relationship');
+    });
+
+    it('should build growth analysis prompt', async () => {
+      const result = await builder.buildPrompt(
+        mockInputData.mbtiType,
+        mockInputData,
+        AnalysisType.GROWTH
+      );
+
+      expect(result.systemRole).toContain('个人成长教练');
+      expect(result.userPrompt).toContain('growth');
+    });
+
+    it('should include user context when provided', async () => {
+      const userContext = {
+        age: 30,
+        occupation: 'Software Engineer',
+        education: 'Master',
+        goals: ['Leadership', 'Work-life balance'],
+        challenges: ['Burnout', 'Communication'],
+      };
+
+      const result = await builder.buildPrompt(
+        mockInputData.mbtiType,
+        mockInputData,
+        AnalysisType.COMPREHENSIVE,
+        userContext
+      );
+
+      expect(result.userPrompt).toContain('30');
+      expect(result.userPrompt).toContain('Software Engineer');
+      expect(result.userPrompt).toContain('Leadership');
+    });
+  });
+
+  describe('extractJSON', () => {
+    it('should extract JSON from markdown code block', () => {
+      const response = '```json\n{"key": "value"}\n```';
+      const result = builder.extractJSON(response);
+      expect(result).toBe('{"key": "value"}');
+    });
+
+    it('should extract JSON from plain text', () => {
+      const response = '{"key": "value"}';
+      const result = builder.extractJSON(response);
+      expect(result).toBe('{"key": "value"}');
+    });
+
+    it('should handle JSON with leading/trailing text', () => {
+      const response = 'Here is the result:\n{"key": "value"}\nDone!';
+      const result = builder.extractJSON(response);
+      expect(result).toBe('{"key": "value"}');
+    });
+
+    it('should throw error if no JSON found', () => {
+      const response = 'No JSON here!';
+      expect(() => builder.extractJSON(response)).toThrow();
+    });
+  });
+
+  describe('validateAnalysisContent', () => {
+    const validContent = {
+      overview: {
+        title: 'INTJ - 建筑师',
+        summary: 'Test summary',
+        keyPoints: ['Point 1', 'Point 2'],
+      },
+      strengths: {
+        items: [{ name: 'Strength 1', description: 'Description' }],
+        application: ['App 1'],
+      },
+      weaknesses: {
+        items: [{ name: 'Weakness 1', description: 'Description' }],
+        improvementStrategies: ['Strategy 1'],
+      },
+      career: {
+        bestMatches: [{ role: 'Role 1', reason: 'Reason 1', score: 90 }],
+        developmentPaths: ['Path 1'],
+        recommendations: ['Rec 1'],
+      },
+      relationships: {
+        style: 'Test style',
+        strengthsInRelationships: ['Strength 1'],
+        challenges: ['Challenge 1'],
+        advice: ['Advice 1'],
+      },
+      growth: {
+        shortTerm: ['Goal 1'],
+        longTerm: ['Goal 2'],
+        habits: [{ name: 'Habit 1', frequency: 'Daily', description: 'Desc' }],
+      },
+      actionPlan: {
+        immediate: [{ priority: 'high', action: 'Action 1', timeline: '1 week' }],
+        ongoing: [{ priority: 'medium', action: 'Action 2', timeline: 'Ongoing' }],
+      },
+    };
+
+    it('should validate correct content structure', () => {
+      expect(() => builder.validateAnalysisContent(validContent)).not.toThrow();
+    });
+
+    it('should throw error on missing overview', () => {
+      const invalidContent = { ...validContent };
+      delete (invalidContent as any).overview;
+      expect(() => builder.validateAnalysisContent(invalidContent as any)).toThrow();
+    });
+
+    it('should throw error on invalid priority', () => {
+      const invalidContent = {
+        ...validContent,
+        actionPlan: {
+          immediate: [{ priority: 'invalid', action: 'Action', timeline: '1 week' }],
+          ongoing: [],
+        },
+      };
+      expect(() => builder.validateAnalysisContent(invalidContent as any)).toThrow();
+    });
+
+    it('should throw error on empty arrays', () => {
+      const invalidContent = {
+        ...validContent,
+        strengths: {
+          items: [],
+          application: [],
+        },
+      };
+      expect(() => builder.validateAnalysisContent(invalidContent as any)).toThrow();
+    });
+  });
+
+  describe('buildComprehensivePrompt', () => {
+    it('should include dimension scores in prompt', async () => {
+      const result = await builder.buildPrompt(
+        mockInputData.mbtiType,
+        mockInputData,
+        AnalysisType.COMPREHENSIVE
+      );
+
+      expect(result.userPrompt).toContain('EI: 75');
+      expect(result.userPrompt).toContain('SN: 40');
+      expect(result.userPrompt).toContain('TF: 65');
+      expect(result.userPrompt).toContain('JP: 55');
+    });
+
+    it('should include JSON format requirements', async () => {
+      const result = await builder.buildPrompt(
+        mockInputData.mbtiType,
+        mockInputData,
+        AnalysisType.COMPREHENSIVE
+      );
+
+      expect(result.userPrompt).toContain('JSON格式');
+      expect(result.userPrompt).toContain('overview');
+      expect(result.userPrompt).toContain('strengths');
+      expect(result.userPrompt).toContain('weaknesses');
+    });
+  });
+
+  describe('formatDimensionScores', () => {
+    it('should format dimension scores correctly', async () => {
+      const result = await builder.buildPrompt(
+        mockInputData.mbtiType,
+        mockInputData,
+        AnalysisType.COMPREHENSIVE
+      );
+
+      // Should show both percentage and letter
+      expect(result.userPrompt).toMatch(/EI.*75.*E/);
+      expect(result.userPrompt).toMatch(/SN.*40.*N/);
+      expect(result.userPrompt).toMatch(/TF.*65.*T/);
+      expect(result.userPrompt).toMatch(/JP.*55.*J/);
+    });
+
+    it('should handle edge case scores (50)', async () => {
+      const inputData = {
+        ...mockInputData,
+        dimensionScores: { EI: 50, SN: 50, TF: 50, JP: 50 },
+      };
+
+      const result = await builder.buildPrompt(
+        inputData.mbtiType,
+        inputData,
+        AnalysisType.COMPREHENSIVE
+      );
+
+      expect(result.userPrompt).toContain('EI: 50');
+      expect(result.userPrompt).toContain('SN: 50');
+    });
+  });
+});

@@ -1,0 +1,366 @@
+/**
+ * AI Analysis Integration Tests
+ * Tests the complete flow from analysis creation to result retrieval
+ */
+
+import { Test, TestingModule } from '@nestjs/testing';
+import { INestApplication } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { ConfigModule } from '@nestjs/config';
+import { AppModule } from '../../../cmd/api/app.module';
+import { AIAnalysisService } from './service/ai-analysis.service';
+import { TestSessionRepository } from '../repository/test-session.repository';
+import { TestReportRepository } from '../repository/repositories';
+import { AnalysisType, AnalysisStatus } from './entities/ai-analysis.entity';
+import { Redis } from 'ioredis';
+
+describe('AI Analysis Integration Tests', () => {
+  let app: INestApplication;
+  let aiAnalysisService: AIAnalysisService;
+  let testSessionRepository: TestSessionRepository;
+  let testReportRepository: TestReportRepository;
+  let redisClient: Redis;
+
+  // Test data
+  let testSessionToken: string;
+  let testReportId: number;
+
+  beforeAll(async () => {
+    // Create test module with actual database connection
+    const moduleFixture: TestingModule = await Test.createTestingModule({
+      imports: [
+        ConfigModule.forRoot({
+          isGlobal: true,
+          envFilePath: '.env.test',
+        }),
+        TypeOrmModule.forRoot({
+          type: 'postgres',
+          host: process.env.DB_HOST || 'localhost',
+          port: parseInt(process.env.DB_PORT || '5432'),
+          username: process.env.DB_USER || 'postgres',
+          password: process.env.DB_PASSWORD || 'postgres',
+          database: process.env.DB_NAME || 'mbti_test',
+          entities: [__dirname + '/../**/*.entity{.ts,.js}'],
+          synchronize: false, // Don't modify schema in tests
+        }),
+        AppModule,
+      ],
+    }).compile();
+
+    app = moduleFixture.createNestApplication();
+    await app.init();
+
+    aiAnalysisService = app.get<AIAnalysisService>(AIAnalysisService);
+    testSessionRepository = app.get<TestSessionRepository>(TestSessionRepository);
+    testReportRepository = app.get<TestReportRepository>(TestReportRepository);
+
+    // Setup Redis client for cache cleanup
+    redisClient = new Redis({
+      host: process.env.REDIS_HOST || 'localhost',
+      port: parseInt(process.env.REDIS_PORT || '6379'),
+    });
+  });
+
+  afterAll(async () => {
+    // Cleanup test data
+    await cleanupTestData();
+
+    await app.close();
+    await redisClient.quit();
+  });
+
+  beforeEach(async () => {
+    // Setup test session and report
+    await setupTestData();
+  });
+
+  afterEach(async () => {
+    // Clear Redis cache
+    await redisClient.flushdb();
+  });
+
+  describe('Complete AI Analysis Flow', () => {
+    it('should create analysis task and track status', async () => {
+      // Create analysis task
+      const createResult = await aiAnalysisService.createAnalysis(
+        testReportId,
+        testSessionToken,
+        {
+          analysisType: AnalysisType.COMPREHENSIVE,
+        }
+      );
+
+      expect(createResult).toBeDefined();
+      expect(createResult.taskId).toBeDefined();
+      expect(createResult.reportId).toBe(testReportId);
+      expect(createResult.status).toBe(AnalysisStatus.PENDING);
+      expect(createResult.estimatedTime).toBeGreaterThan(0);
+
+      // Check status
+      const status = await aiAnalysisService.getAnalysisStatus(createResult.taskId);
+      expect(status.status).toBeDefined();
+      expect(status.taskId).toBe(createResult.taskId);
+    });
+
+    it('should return existing analysis if already exists', async () => {
+      // Create first analysis
+      const firstResult = await aiAnalysisService.createAnalysis(
+        testReportId,
+        testSessionToken,
+        {
+          analysisType: AnalysisType.COMPREHENSIVE,
+        }
+      );
+
+      // Create second analysis (should return first one)
+      const secondResult = await aiAnalysisService.createAnalysis(
+        testReportId,
+        testSessionToken,
+        {
+          analysisType: AnalysisType.COMPREHENSIVE,
+        }
+      );
+
+      expect(secondResult.taskId).toBe(firstResult.taskId);
+    });
+
+    it('should create new analysis when forceRegenerate is true', async () => {
+      // Create first analysis
+      const firstResult = await aiAnalysisService.createAnalysis(
+        testReportId,
+        testSessionToken,
+        {
+          analysisType: AnalysisType.COMPREHENSIVE,
+        }
+      );
+
+      // Create second analysis with forceRegenerate
+      const secondResult = await aiAnalysisService.createAnalysis(
+        testReportId,
+        testSessionToken,
+        {
+          analysisType: AnalysisType.COMPREHENSIVE,
+          forceRegenerate: true,
+        }
+      );
+
+      expect(secondResult.taskId).not.toBe(firstResult.taskId);
+    });
+
+    it('should support all analysis types', async () => {
+      const types = [
+        AnalysisType.COMPREHENSIVE,
+        AnalysisType.CAREER,
+        AnalysisType.RELATIONSHIP,
+        AnalysisType.GROWTH,
+      ];
+
+      for (const type of types) {
+        const result = await aiAnalysisService.createAnalysis(
+          testReportId,
+          testSessionToken,
+          { analysisType: type }
+        );
+
+        expect(result).toBeDefined();
+        expect(result.taskId).toBeDefined();
+      }
+    });
+
+    it('should include user context in analysis', async () => {
+      const userContext = {
+        age: 30,
+        occupation: 'Software Engineer',
+        education: 'Master',
+        goals: ['Leadership', 'Innovation'],
+        challenges: ['Communication', 'Patience'],
+      };
+
+      const result = await aiAnalysisService.createAnalysis(
+        testReportId,
+        testSessionToken,
+        {
+          analysisType: AnalysisType.CAREER,
+          userContext,
+        }
+      );
+
+      expect(result).toBeDefined();
+      expect(result.taskId).toBeDefined();
+    });
+  });
+
+  describe('Caching Behavior', () => {
+    it('should use cached analysis for similar profiles', async () => {
+      // Create first report with INTJ profile
+      const firstReportId = await createTestReport('INTJ', { EI: 75, SN: 40, TF: 65, JP: 55 });
+
+      // Create analysis for first report
+      const firstAnalysis = await aiAnalysisService.createAnalysis(
+        firstReportId,
+        testSessionToken,
+        { analysisType: AnalysisType.COMPREHENSIVE }
+      );
+
+      // Create second report with very similar INTJ profile
+      const secondReportId = await createTestReport('INTJ', { EI: 76, SN: 41, TF: 64, JP: 56 });
+
+      // Create analysis for second report (should use cache)
+      const secondAnalysis = await aiAnalysisService.createAnalysis(
+        secondReportId,
+        testSessionToken,
+        { analysisType: AnalysisType.COMPREHENSIVE }
+      );
+
+      // The second analysis should complete instantly (from cache)
+      expect(secondAnalysis).toBeDefined();
+    });
+
+    it('should not use cache for different MBTI types', async () => {
+      // Create INTJ report
+      const intjReportId = await createTestReport('INTJ', { EI: 75, SN: 40, TF: 65, JP: 55 });
+
+      // Create ENFP report
+      const enfpReportId = await createTestReport('ENFP', { EI: 30, SN: 55, TF: 45, JP: 35 });
+
+      // Create analysis for INTJ
+      const intjAnalysis = await aiAnalysisService.createAnalysis(
+        intjReportId,
+        testSessionToken,
+        { analysisType: AnalysisType.COMPREHENSIVE }
+      );
+
+      // Create analysis for ENFP (should NOT use cache)
+      const enfpAnalysis = await aiAnalysisService.createAnalysis(
+        enfpReportId,
+        testSessionToken,
+        { analysisType: AnalysisType.COMPREHENSIVE }
+      );
+
+      expect(enfpAnalysis.taskId).not.toBe(intjAnalysis.taskId);
+    });
+  });
+
+  describe('Error Handling', () => {
+    it('should throw error for invalid session token', async () => {
+      await expect(
+        aiAnalysisService.createAnalysis(testReportId, 'invalid-token', {
+          analysisType: AnalysisType.COMPREHENSIVE,
+        })
+      ).rejects.toThrow();
+    });
+
+    it('should throw error for non-existent report', async () => {
+      await expect(
+        aiAnalysisService.createAnalysis(99999, testSessionToken, {
+          analysisType: AnalysisType.COMPREHENSIVE,
+        })
+      ).rejects.toThrow();
+    });
+
+    it('should throw error when checking status of non-existent task', async () => {
+      await expect(
+        aiAnalysisService.getAnalysisStatus('non-existent-task')
+      ).rejects.toThrow();
+    });
+  });
+
+  describe('Statistics and History', () => {
+    it('should return user analysis history', async () => {
+      // Create analysis
+      await aiAnalysisService.createAnalysis(testReportId, testSessionToken, {
+        analysisType: AnalysisType.COMPREHENSIVE,
+      });
+
+      // Get history
+      const history = await aiAnalysisService.getUserHistory(testSessionToken, {
+        limit: 10,
+      });
+
+      expect(history).toBeDefined();
+      expect(history.total).toBeGreaterThan(0);
+      expect(history.analyses).toBeInstanceOf(Array);
+    });
+
+    it('should return empty history for anonymous users', async () => {
+      // Create anonymous session
+      const anonymousToken = await createAnonymousSession();
+
+      const history = await aiAnalysisService.getUserHistory(anonymousToken, {
+        limit: 10,
+      });
+
+      expect(history.total).toBe(0);
+      expect(history.analyses).toEqual([]);
+    });
+
+    it('should return usage statistics', async () => {
+      // Create analysis
+      await aiAnalysisService.createAnalysis(testReportId, testSessionToken, {
+        analysisType: AnalysisType.COMPREHENSIVE,
+      });
+
+      // Get stats
+      const stats = await aiAnalysisService.getStats(testSessionToken);
+
+      expect(stats).toBeDefined();
+      expect(stats.totalAnalyses).toBeGreaterThanOrEqual(0);
+      expect(stats.completedAnalyses).toBeGreaterThanOrEqual(0);
+      expect(stats.totalTokensUsed).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  // Helper functions
+  async function setupTestData() {
+    // Create test session
+    const session = await testSessionRepository.create({
+      userId: null,
+      currentQuestionIndex: 60,
+      answers: [],
+      status: 'completed',
+      completedAt: new Date(),
+    });
+    testSessionToken = session.token;
+
+    // Create test report
+    testReportId = await createTestReport('INTJ', {
+      EI: 75,
+      SN: 40,
+      TF: 65,
+      JP: 55,
+    });
+  }
+
+  async function createTestReport(
+    mbtiType: string,
+    dimensionScores: Record<string, number>
+  ): Promise<number> {
+    const report = await testReportRepository.create({
+      userId: null,
+      sessionId: testSessionToken,
+      mbtiType,
+      resultScores: dimensionScores,
+      shareToken: `test_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      completedAt: new Date(),
+    });
+
+    return report.id;
+  }
+
+  async function createAnonymousSession(): Promise<string> {
+    const session = await testSessionRepository.create({
+      userId: null,
+      currentQuestionIndex: 0,
+      answers: [],
+      status: 'in_progress',
+    });
+
+    return session.token;
+  }
+
+  async function cleanupTestData() {
+    // Clean up test data from database
+    // This depends on your repository implementation
+    // You might want to add cleanup methods to your repositories
+  }
+});

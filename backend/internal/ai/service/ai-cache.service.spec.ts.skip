@@ -1,0 +1,292 @@
+/**
+ * AI Cache Service Unit Tests
+ */
+
+import { Test, TestingModule } from '@nestjs/testing';
+import { AICacheService } from './ai-cache.service';
+import { Redis } from 'ioredis';
+import { NotFoundException } from '@nestjs/common';
+
+describe('AICacheService', () => {
+  let service: AICacheService;
+  let redisMock: jest.Mocked<Redis>;
+
+  beforeEach(async () => {
+    // Create Redis mock
+    redisMock = {
+      setex: jest.fn(),
+      get: jest.fn(),
+      keys: jest.fn(),
+      del: jest.fn(),
+    } as any;
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        AICacheService,
+        {
+          provide: 'REDIS_CLIENT',
+          useValue: redisMock,
+        },
+      ],
+    }).compile();
+
+    service = module.get<AICacheService>(AICacheService);
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  describe('cacheAnalysis', () => {
+    it('should cache analysis with correct TTL', async () => {
+      redisMock.setex.mockResolvedValue('OK');
+
+      await service.cacheAnalysis(
+        123,
+        456,
+        'INTJ',
+        { EI: 75, SN: 60, TF: 80, JP: 70 },
+        'comprehensive',
+        3600
+      );
+
+      expect(redisMock.setex).toHaveBeenCalledWith(
+        'ai:analysis:456:comprehensive',
+        3600,
+        expect.stringContaining('"analysisId":123')
+      );
+    });
+
+    it('should handle Redis errors gracefully', async () => {
+      redisMock.setex.mockRejectedValue(new Error('Redis connection failed'));
+
+      // Should not throw
+      await expect(
+        service.cacheAnalysis(
+          123,
+          456,
+          'INTJ',
+          { EI: 75, SN: 60, TF: 80, JP: 70 },
+          'comprehensive'
+        )
+      ).resolves.not.toThrow();
+    });
+  });
+
+  describe('getCachedAnalysis', () => {
+    it('should return cached analysis when found', async () => {
+      const cachedData = {
+        analysisId: 123,
+        reportId: 456,
+        mbtiType: 'INTJ',
+        dimensionScores: { EI: 75, SN: 60, TF: 80, JP: 70 },
+        analysisType: 'comprehensive',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      };
+
+      redisMock.get.mockResolvedValue(JSON.stringify(cachedData));
+
+      const result = await service.getCachedAnalysis(456, 'comprehensive');
+
+      expect(result).toEqual(cachedData);
+      expect(redisMock.get).toHaveBeenCalledWith('ai:analysis:456:comprehensive');
+    });
+
+    it('should return null when cache miss', async () => {
+      redisMock.get.mockResolvedValue(null);
+
+      const result = await service.getCachedAnalysis(456, 'comprehensive');
+
+      expect(result).toBeNull();
+    });
+
+    it('should return null on Redis error', async () => {
+      redisMock.get.mockRejectedValue(new Error('Redis error'));
+
+      const result = await service.getCachedAnalysis(456, 'comprehensive');
+
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('findSimilarAnalysis', () => {
+    it('should find similar analysis based on dimension scores', async () => {
+      const similarEntry = {
+        analysisId: 123,
+        reportId: 456,
+        mbtiType: 'INTJ',
+        dimensionScores: { EI: 76, SN: 61, TF: 79, JP: 71 }, // Very similar
+        analysisType: 'comprehensive',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      };
+
+      redisMock.keys.mockResolvedValue(['ai:analysis:456:comprehensive']);
+      redisMock.get.mockResolvedValue(JSON.stringify(similarEntry));
+
+      const result = await service.findSimilarAnalysis(
+        'INTJ',
+        { EI: 75, SN: 60, TF: 80, JP: 70 },
+        'comprehensive'
+      );
+
+      expect(result).not.toBeNull();
+      expect(result?.analysisId).toBe(123);
+    });
+
+    it('should not return analyses with different MBTI types', async () => {
+      const differentEntry = {
+        analysisId: 123,
+        reportId: 456,
+        mbtiType: 'ENFP', // Different type
+        dimensionScores: { EI: 75, SN: 60, TF: 80, JP: 70 },
+        analysisType: 'comprehensive',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      };
+
+      redisMock.keys.mockResolvedValue(['ai:analysis:456:comprehensive']);
+      redisMock.get.mockResolvedValue(JSON.stringify(differentEntry));
+
+      const result = await service.findSimilarAnalysis(
+        'INTJ',
+        { EI: 75, SN: 60, TF: 80, JP: 70 },
+        'comprehensive'
+      );
+
+      expect(result).toBeNull();
+    });
+
+    it('should not return analyses below similarity threshold', async () => {
+      const dissimilarEntry = {
+        analysisId: 123,
+        reportId: 456,
+        mbtiType: 'INTJ',
+        dimensionScores: { EI: 25, SN: 90, TF: 20, JP: 30 }, // Very different
+        analysisType: 'comprehensive',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      };
+
+      redisMock.keys.mockResolvedValue(['ai:analysis:456:comprehensive']);
+      redisMock.get.mockResolvedValue(JSON.stringify(dissimilarEntry));
+
+      const result = await service.findSimilarAnalysis(
+        'INTJ',
+        { EI: 75, SN: 60, TF: 80, JP: 70 },
+        'comprehensive'
+      );
+
+      expect(result).toBeNull();
+    });
+
+    it('should return null when no entries found', async () => {
+      redisMock.keys.mockResolvedValue([]);
+
+      const result = await service.findSimilarAnalysis(
+        'INTJ',
+        { EI: 75, SN: 60, TF: 80, JP: 70 },
+        'comprehensive'
+      );
+
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('invalidateCache', () => {
+    it('should invalidate all cache entries for a report', async () => {
+      redisMock.keys.mockResolvedValue([
+        'ai:analysis:456:comprehensive',
+        'ai:analysis:456:career',
+      ]);
+      redisMock.del.mockResolvedValue(2);
+
+      await service.invalidateCache(456);
+
+      expect(redisMock.keys).toHaveBeenCalledWith('ai:analysis:456:*');
+      expect(redisMock.del).toHaveBeenCalledWith(
+        'ai:analysis:456:comprehensive',
+        'ai:analysis:456:career'
+      );
+    });
+
+    it('should do nothing when no cache entries exist', async () => {
+      redisMock.keys.mockResolvedValue([]);
+
+      await service.invalidateCache(456);
+
+      expect(redisMock.del).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('clearAllCache', () => {
+    it('should clear all AI analysis cache', async () => {
+      redisMock.keys.mockResolvedValue([
+        'ai:analysis:456:comprehensive',
+        'ai:analysis:789:career',
+      ]);
+      redisMock.del.mockResolvedValue(2);
+
+      await service.clearAllCache();
+
+      expect(redisMock.keys).toHaveBeenCalledWith('ai:analysis:*');
+      expect(redisMock.del).toHaveBeenCalledWith(
+        'ai:analysis:456:comprehensive',
+        'ai:analysis:789:career'
+      );
+    });
+  });
+
+  describe('getCacheStats', () => {
+    it('should return cache statistics', async () => {
+      const entries = [
+        {
+          analysisId: 123,
+          reportId: 456,
+          mbtiType: 'INTJ',
+          dimensionScores: {},
+          analysisType: 'comprehensive',
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 3600000).toISOString(),
+        },
+        {
+          analysisId: 124,
+          reportId: 789,
+          mbtiType: 'ENFP',
+          dimensionScores: {},
+          analysisType: 'career',
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 3600000).toISOString(),
+        },
+      ];
+
+      redisMock.keys.mockResolvedValue(['key1', 'key2']);
+      redisMock.get
+        .mockResolvedValueOnce(JSON.stringify(entries[0]))
+        .mockResolvedValueOnce(JSON.stringify(entries[1]));
+
+      const stats = await service.getCacheStats();
+
+      expect(stats.totalEntries).toBe(2);
+      expect(stats.entriesByType).toEqual({
+        comprehensive: 1,
+        career: 1,
+      });
+      expect(stats.entriesByMBTI).toEqual({
+        INTJ: 1,
+        ENFP: 1,
+      });
+    });
+
+    it('should return empty stats on error', async () => {
+      redisMock.keys.mockRejectedValue(new Error('Redis error'));
+
+      const stats = await service.getCacheStats();
+
+      expect(stats.totalEntries).toBe(0);
+      expect(stats.entriesByType).toEqual({});
+      expect(stats.entriesByMBTI).toEqual({});
+    });
+  });
+});
