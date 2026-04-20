@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clear MBTI Test Data</title>
+</head>
+<body>
+    <h1>Clearing MBTI Test Data...</h1>
+    <script>
+        // Clear all MBTI test related data
+        localStorage.removeItem('mbti_session_token');
+        localStorage.removeItem('mbti_test_session');
+        localStorage.removeItem('mbti_test_store');
+        localStorage.removeItem('auth_token');
+
+        console.log('✅ All MBTI test data cleared from localStorage');
+
+        // Show success message
+        document.body.innerHTML = `
+            <div style="text-align: center; padding: 50px; font-family: Arial, sans-serif;">
+                <h1 style="color: #4CAF50;">✅ 数据清除成功！</h1>
+                <p>所有测试数据已清除</p>
+                <p>Deleted 7 test reports</p>
+                <p>Deleted 546 test answers</p>
+                <p>Deleted 23 test sessions</p>
+                <br>
+                <a href="http://localhost:3000" style="
+                    padding: 15px 30px;
+                    background: #7C6FED;
+                    color: white;
+                    text-decoration: none;
+                    border-radius: 8px;
+                    font-size: 18px;
+                    display: inline-block;
+                ">🚀 开始新测试</a>
+            </div>
+        `;
+
+        // Auto redirect after 3 seconds
+        setTimeout(() => {
+            window.location.href = 'http://localhost:3000';
+        }, 3000);
+    </script>
+</body>
+</html>

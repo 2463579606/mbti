@@ -1,0 +1,49 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2021",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "incremental": true,
+    "skipLibCheck": true,
+    "strictNullChecks": false,
+    "noImplicitAny": false,
+    "strictBindCallApply": false,
+    "forceConsistentCasingInFileNames": false,
+    "noFallthroughCasesInSwitch": false,
+    "strict": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noImplicitReturns": false,
+    "esModuleInterop": true,
+    "paths": {
+      "@config": ["internal/config"],
+      "@domain": ["internal/domain"],
+      "@handler": ["internal/handler"],
+      "@middleware": ["internal/middleware"],
+      "@repository": ["internal/repository"],
+      "@service": ["internal/service"],
+      "@cache": ["pkg/cache"],
+      "@database": ["pkg/database"],
+      "@response": ["pkg/response"],
+      "@errors": ["pkg/errors"],
+      "@utils": ["pkg/utils"]
+    }
+  },
+  "include": [
+    "cmd/**/*",
+    "internal/**/*",
+    "pkg/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "tests"
+  ]
+}
